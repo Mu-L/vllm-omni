@@ -12,6 +12,9 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 RUNNER = REPO_ROOT / "vllm_omni" / "worker" / "gpu_ar_model_runner.py"
 RUNNER_ASSISTED_METADATA = REPO_ROOT / "vllm_omni" / "runner_assisted_metadata.py"
 TALKER = REPO_ROOT / "vllm_omni" / "model_executor" / "models" / "voxcpm2" / "voxcpm2_talker.py"
+VOXCPM2_PIPELINE = REPO_ROOT / "vllm_omni" / "model_executor" / "models" / "voxcpm2" / "pipeline.py"
+VOXCPM2_SCHEDULER = REPO_ROOT / "vllm_omni" / "model_executor" / "models" / "voxcpm2" / "scheduler.py"
+OMNI_AR_SCHEDULER = REPO_ROOT / "vllm_omni" / "core" / "sched" / "omni_ar_scheduler.py"
 DEPLOY = REPO_ROOT / "vllm_omni" / "deploy" / "voxcpm2.yaml"
 
 
@@ -167,6 +170,23 @@ def test_voxcpm2_unified_skip_preserves_segmented_decode_graphs():
     assert "notself._enable_unified_decode_graphorunified_skip_reasonisnotNone" in compact_source
     assert "ifuse_segmented_decode_graph:" in compact_source
     assert "anduse_segmented_decode_graph" in compact_source
+
+
+def test_voxcpm2_scheduler_policy_stays_model_local():
+    common_source = OMNI_AR_SCHEDULER.read_text()
+    voxcpm2_scheduler_source = VOXCPM2_SCHEDULER.read_text()
+    pipeline_source = VOXCPM2_PIPELINE.read_text()
+
+    assert "VoxCPM2TalkerForConditionalGeneration" not in common_source
+    assert "voxcpm2_runtime_config" not in common_source
+    assert "pure_decode_graph" not in common_source
+    assert "_schedule_with_optional_waiting_deferral" in common_source
+
+    assert "class VoxCPM2OmniARAsyncScheduler(OmniARAsyncScheduler)" in voxcpm2_scheduler_source
+    assert "voxcpm2_runtime_config" in voxcpm2_scheduler_source
+    assert "_should_defer_waiting_for_unified_decode_graph" in voxcpm2_scheduler_source
+    assert "self._schedule_with_optional_waiting_deferral(" in voxcpm2_scheduler_source
+    assert "vllm_omni.model_executor.models.voxcpm2.scheduler.VoxCPM2OmniARAsyncScheduler" in pipeline_source
 
 
 def test_voxcpm2_deploy_defaults_to_full_unified_graph_only():

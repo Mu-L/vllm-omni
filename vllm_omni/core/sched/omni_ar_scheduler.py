@@ -94,7 +94,6 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         self._latest_omni_connector_output: OmniConnectorOutput | None = None
         # Snapshot prompt length for each streaming input update
         self._new_prompt_len_snapshot: dict[str, int] = {}
-        self._defer_waiting_for_pure_decode_graph = self._pure_decode_graph_admission_deferral_enabled()
 
     def _get_confirmed_num_computed_tokens(self, request: Request) -> int:
         """num_computed_tokens minus async placeholders (KV actually on GPU)."""
@@ -207,40 +206,10 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
 
         return False
 
-    def _pure_decode_graph_admission_deferral_enabled(self) -> bool:
-        # The scheduler mechanism is generic: if a model's optimized decode
-        # graph requires pure decode batches, waiting prefill admissions can
-        # be deferred for one tick while decode-ready requests are running.
-        # Enabling remains model opt-in; currently only VoxCPM2 exposes the
-        # matching runtime config and CUDA graph contract.
-        model_config = self.vllm_config.model_config
-        if getattr(model_config, "model_arch", None) != "VoxCPM2TalkerForConditionalGeneration":
-            return False
-
-        hf_config = getattr(model_config, "hf_config", None)
-        runtime_config = getattr(hf_config, "voxcpm2_runtime_config", None)
-        if isinstance(runtime_config, dict):
-            return bool(runtime_config.get("enable_unified_decode_graph", False))
-        return bool(getattr(runtime_config, "enable_unified_decode_graph", False))
-
-    def _should_defer_waiting_for_pure_decode_graph(self) -> bool:
-        # Some model-owned decode graphs only apply to pure decode batches.
-        # When a decode-ready request is already running, defer new
-        # waiting admissions for this scheduler tick so decode-only steps keep
-        # using the graph path.
-        if not self._defer_waiting_for_pure_decode_graph:
-            return False
-        if not self.waiting or not self.running:
-            return False
-
-        for request in self.running:
-            if getattr(request, "status", None) != RequestStatus.RUNNING or request.is_finished():
-                continue
-            if self._get_confirmed_num_computed_tokens(request) >= request.num_prompt_tokens:
-                return True
-        return False
-
     def schedule(self) -> SchedulerOutput:  # type: ignore[override]
+        return self._schedule_with_optional_waiting_deferral(defer_waiting=False)
+
+    def _schedule_with_optional_waiting_deferral(self, *, defer_waiting: bool) -> SchedulerOutput:
         # Remove FINISHED_ABORTED requests before the upstream scheduler sees
         # them. Upstream vllm raises RuntimeError on this status; omni allows
         # async abort (e.g. client disconnect during TTS streaming) to leave
@@ -257,9 +226,8 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
                 self.waiting, self.running, scheduler_requests=self.requests
             )
 
-        defer_waiting_for_pure_decode_graph = self._should_defer_waiting_for_pure_decode_graph()
         original_waiting = None
-        if defer_waiting_for_pure_decode_graph:
+        if defer_waiting:
             original_waiting = self.waiting
             self.waiting = create_request_queue(self.policy)
 

@@ -6,7 +6,7 @@ import pytest
 from vllm.v1.request import RequestStatus
 
 import vllm_omni.core.sched.omni_ar_scheduler as scheduler_mod
-from vllm_omni.core.sched.omni_ar_scheduler import OmniARScheduler
+from vllm_omni.model_executor.models.voxcpm2.scheduler import VoxCPM2OmniARAsyncScheduler
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -51,45 +51,43 @@ class _MockRequest:
         return RequestStatus.is_finished(self.status)
 
 
-def _make_scheduler(*, model_arch: str, enable_unified_decode_graph: bool = True) -> OmniARScheduler:
-    sched = OmniARScheduler.__new__(OmniARScheduler)
+def _make_scheduler(*, enable_unified_decode_graph: bool = True) -> VoxCPM2OmniARAsyncScheduler:
+    sched = VoxCPM2OmniARAsyncScheduler.__new__(VoxCPM2OmniARAsyncScheduler)
     runtime_config = SimpleNamespace(enable_unified_decode_graph=enable_unified_decode_graph)
     sched.vllm_config = SimpleNamespace(
         model_config=SimpleNamespace(
-            model_arch=model_arch,
             hf_config=SimpleNamespace(voxcpm2_runtime_config=runtime_config),
         )
     )
-    sched._defer_waiting_for_pure_decode_graph = sched._pure_decode_graph_admission_deferral_enabled()
     return sched
 
 
 def test_voxcpm2_unified_decode_graph_defers_waiting_when_decode_ready() -> None:
-    scheduler = _make_scheduler(model_arch="VoxCPM2TalkerForConditionalGeneration")
+    scheduler = _make_scheduler()
     scheduler.running = [_MockRequest("decode")]
     scheduler.waiting = _MockQueue([_MockRequest("prefill", status=RequestStatus.WAITING)])
 
-    assert scheduler._should_defer_waiting_for_pure_decode_graph()
+    assert scheduler._should_defer_waiting_for_unified_decode_graph()
 
 
 def test_voxcpm2_unified_decode_graph_does_not_defer_without_decode_ready() -> None:
-    scheduler = _make_scheduler(model_arch="VoxCPM2TalkerForConditionalGeneration")
+    scheduler = _make_scheduler()
     scheduler.running = [_MockRequest("prefill-running", num_prompt_tokens=8, num_computed_tokens=4)]
     scheduler.waiting = _MockQueue([_MockRequest("waiting", status=RequestStatus.WAITING)])
 
-    assert not scheduler._should_defer_waiting_for_pure_decode_graph()
+    assert not scheduler._should_defer_waiting_for_unified_decode_graph()
 
 
-def test_unified_decode_graph_waiting_deferral_is_voxcpm2_specific() -> None:
-    scheduler = _make_scheduler(model_arch="OtherModelForConditionalGeneration")
+def test_voxcpm2_unified_decode_graph_does_not_defer_when_disabled() -> None:
+    scheduler = _make_scheduler(enable_unified_decode_graph=False)
     scheduler.running = [_MockRequest("decode")]
     scheduler.waiting = _MockQueue([_MockRequest("prefill", status=RequestStatus.WAITING)])
 
-    assert not scheduler._should_defer_waiting_for_pure_decode_graph()
+    assert not scheduler._should_defer_waiting_for_unified_decode_graph()
 
 
 def test_unified_decode_graph_deferral_restores_waiting_queue(monkeypatch) -> None:
-    scheduler = _make_scheduler(model_arch="VoxCPM2TalkerForConditionalGeneration")
+    scheduler = _make_scheduler()
     scheduler.running = [_MockRequest("decode")]
     original_waiting_req = _MockRequest("waiting", status=RequestStatus.WAITING)
     deferred_by_upstream = _MockRequest("deferred-by-upstream", status=RequestStatus.WAITING)
