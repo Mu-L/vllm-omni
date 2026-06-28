@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from copy import copy
 from dataclasses import replace
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Protocol
 
 import numpy as np
 import torch
@@ -140,6 +140,25 @@ class _OmniOutputTensorSnapshot(NamedTuple):
     staged_hidden_states_cpu: torch.Tensor | None
     multimodal_outputs: Any
     async_payload: _AsyncCPUPayloadSnapshot | None = None
+
+
+class RunnerAssistedAttentionMetadataProvider(Protocol):
+    def get_runner_assisted_full_attention_metadata_request(
+        self,
+        *,
+        req_ids: list[str],
+        num_reqs: int,
+        num_scheduled_tokens: list[int],
+        num_computed_tokens: list[int],
+        max_num_scheduled_tokens: int,
+    ) -> tuple[int, bool] | None: ...
+
+    def set_runner_assisted_full_attention_metadata_context(
+        self,
+        *,
+        enabled: bool,
+        num_reqs: int = 0,
+    ) -> None: ...
 
 
 class OmniAsyncGPUModelRunnerOutput(AsyncGPUModelRunnerOutput):
@@ -602,17 +621,13 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         hook = getattr(self.model, "get_runner_assisted_full_attention_metadata_request", None)
         if not callable(hook):
             return None
-        try:
-            request = hook(
-                req_ids=req_ids,
-                num_reqs=num_reqs,
-                num_scheduled_tokens=num_scheduled_tokens_np.tolist(),
-                num_computed_tokens=num_computed_tokens,
-                max_num_scheduled_tokens=max_num_scheduled_tokens,
-            )
-        except Exception:
-            logger.exception("Model runner-assisted full attention metadata hook failed; ignoring request.")
-            return None
+        request = hook(
+            req_ids=req_ids,
+            num_reqs=num_reqs,
+            num_scheduled_tokens=num_scheduled_tokens_np.tolist(),
+            num_computed_tokens=num_computed_tokens,
+            max_num_scheduled_tokens=max_num_scheduled_tokens,
+        )
         if request is None:
             return None
         try:
@@ -661,15 +676,11 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         hook = getattr(self.model, "set_runner_assisted_full_attention_metadata_context", None)
         if not callable(hook):
             return False
-        try:
-            hook(
-                enabled=enabled,
-                num_reqs=num_reqs,
-            )
-            return True
-        except Exception:
-            logger.exception("Failed to set model runner-assisted full attention metadata context.")
-            return False
+        hook(
+            enabled=enabled,
+            num_reqs=num_reqs,
+        )
+        return True
 
     def _deferred_prefix_cache_mm_keys(self) -> set[str]:
         """Model-declared multimodal keys whose prefix-cache writes are deferred."""

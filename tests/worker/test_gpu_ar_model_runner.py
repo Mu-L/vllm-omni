@@ -415,6 +415,49 @@ def test_async_snapshot_payload_omits_hidden_when_model_opts_out():
 
     assert set(payload.keys()) == {"multimodal_outputs"}
     assert payload["multimodal_outputs"]["codes"]["audio"].tolist() == [[1]]
+
+
+def test_runner_assisted_full_attention_metadata_refresh_pads_buffers():
+    class QueryStartLoc:
+        def __init__(self):
+            self.np = np.full(5, -1, dtype=np.int32)
+            self.copied = False
+
+        def copy_to_gpu(self):
+            self.copied = True
+
+    class BlockTable:
+        def __init__(self):
+            self.commits = []
+
+        def commit_block_table(self, num_reqs_padded):
+            self.commits.append(num_reqs_padded)
+
+    runner = object.__new__(GPUARModelRunner)
+    block_table = BlockTable()
+    runner.input_batch = SimpleNamespace(
+        num_computed_tokens_cpu=torch.tensor([10, 20, 99, 99], dtype=torch.int32),
+        block_table=block_table,
+    )
+    runner.optimistic_seq_lens_cpu = torch.zeros(4, dtype=torch.int32)
+    runner.seq_lens = torch.empty(4, dtype=torch.int32)
+    runner.query_pos = SimpleNamespace(np=np.empty(4, dtype=np.int32))
+    runner.query_start_loc = QueryStartLoc()
+    runner._get_cumsum_and_arange = lambda scheduled, _query_pos: np.cumsum(scheduled, dtype=np.int32)
+
+    runner._refresh_runner_assisted_full_attention_metadata_buffers(
+        num_reqs=2,
+        num_reqs_padded=4,
+        num_scheduled_tokens_np=np.array([1, 2], dtype=np.int32),
+    )
+
+    assert runner.optimistic_seq_lens_cpu.tolist() == [11, 22, 0, 0]
+    assert runner.seq_lens.tolist() == [11, 22, 0, 0]
+    assert runner.query_start_loc.np.tolist() == [0, 1, 3, 3, 3]
+    assert runner.query_start_loc.copied
+    assert block_table.commits == [4]
+
+
 @pytest.mark.parametrize("query_start_loc_attr", ["method", "tensor_attr"])
 def test_sample_tokens_tail_only_prefix_cache_uses_staged_cpu_hidden_states(monkeypatch, query_start_loc_attr):
     runner = object.__new__(GPUARModelRunner)

@@ -48,10 +48,16 @@ def test_ar_runner_without_model_hook_stays_on_normal_path():
     compact_request_source = "".join(request_source.split())
 
     assert "Models without this hook keep the normal runner path" in request_source
+    assert "class RunnerAssistedAttentionMetadataProvider(Protocol)" in source
     assert 'hook=getattr(self.model,"get_runner_assisted_full_attention_metadata_request",None)' in (
         compact_request_source
     )
     assert "ifnotcallable(hook):returnNone" in compact_request_source
+    assert "exceptException" not in compact_request_source
+
+    set_context_source = source[source.index("def _set_runner_assisted_full_attention_metadata_context") :]
+    set_context_source = set_context_source[: set_context_source.index("def _deferred_prefix_cache_mm_keys")]
+    assert "except Exception" not in set_context_source
 
 
 def test_voxcpm2_graph_paths_fail_closed_and_preserve_deterministic_noise():
@@ -81,10 +87,20 @@ def test_voxcpm2_graph_paths_fail_closed_and_preserve_deterministic_noise():
     assert "capture_failed" not in compact_source
     assert "record_fallback" not in source
     assert "fallbacks" not in source
+    assert "**info_dict: Unpack[VoxCPM2PreprocessInput]" in source
+    assert "**info: Unpack[VoxCPM2PostprocessInput]" in source
+    assert "reference_audio: Any" not in source
+    assert "prompt_audio: Any" not in source
+    assert "def _nullify_volatile_metadata(ctx: _ForwardContextLike) -> _ForwardContextLike" in source
+    assert "class _PrefillInputs(NamedTuple)" in source
+    assert "-> _PrefillInputs" in source
+    assert 'inputs["audio_feat"]' not in source
+    assert 'inputs["text_token"]' not in source
 
     capture_source = source[source.index("def _capture_unified_decode_graph") :]
     capture_source = capture_source[: capture_source.index("def _unified_decode_graph_skip_reason")]
-    assert "_voxcpm2_compile_unified_capture_module" in capture_source
+    assert "_voxcpm2_compile_unified_capture_estimator" in capture_source
+    assert "_voxcpm2_compile_unified_capture_feat_encoder" in capture_source
     graph_body = capture_source[capture_source.index("with torch.cuda.graph") :]
     assert "g.cfm_noise.normal_()" not in graph_body
     assert "g.cfm_noise.normal_()" in unified_source
@@ -114,7 +130,7 @@ def test_voxcpm2_batch_unified_graph_requires_runner_metadata_marker():
     assert "override_forward_context" in capture_source
     assert "_nullify_volatile_metadata" in capture_source
     assert "capture_context = override_forward_context(self._nullify_volatile_metadata(ctx))" in capture_source
-    assert "ifsize>1:continue" in compact_source
+    assert "ifsize>1:continue" not in compact_source
     forward_source = source[source.index("def _forward_unified_decode") :]
     forward_source = forward_source[: forward_source.index("# -------------------- vllm hooks")]
     assert "graph_size = self._select_unified_graph_bucket_size(num_reqs)" in forward_source

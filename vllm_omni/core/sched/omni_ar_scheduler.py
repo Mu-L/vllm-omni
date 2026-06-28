@@ -94,6 +94,9 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         self._latest_omni_connector_output: OmniConnectorOutput | None = None
         # Snapshot prompt length for each streaming input update
         self._new_prompt_len_snapshot: dict[str, int] = {}
+        self._voxcpm2_defer_waiting_for_unified_decode_graph = (
+            self._voxcpm2_unified_decode_graph_admission_deferral_enabled()
+        )
 
     def _get_confirmed_num_computed_tokens(self, request: Request) -> int:
         """num_computed_tokens minus async placeholders (KV actually on GPU)."""
@@ -207,6 +210,9 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         return False
 
     def _voxcpm2_unified_decode_graph_admission_deferral_enabled(self) -> bool:
+        # This is intentionally VoxCPM2-specific. Other models can reuse the
+        # same scheduling idea only if their decode graph has the same
+        # pure-decode-batch requirement and an opt-in runtime config.
         model_config = self.vllm_config.model_config
         if getattr(model_config, "model_arch", None) != "VoxCPM2TalkerForConditionalGeneration":
             return False
@@ -222,7 +228,7 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         # batches.  When a decode-ready request is already running, defer new
         # waiting admissions for this scheduler tick so decode-only steps keep
         # using the full unified graph path.
-        if not self._voxcpm2_unified_decode_graph_admission_deferral_enabled():
+        if not self._voxcpm2_defer_waiting_for_unified_decode_graph:
             return False
         if not self.waiting or not self.running:
             return False
