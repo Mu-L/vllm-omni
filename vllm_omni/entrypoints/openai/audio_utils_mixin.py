@@ -1,3 +1,4 @@
+import math
 from io import BytesIO
 
 import numpy as np
@@ -114,10 +115,22 @@ class AudioMixin:
                 window_fn=lambda *_args, **_kwargs: window,
             )
 
+            # For extreme speed ratios (> 2.0), decompose into multiple
+            # passes using sqrt decomposition so that each individual pass
+            # stays within a ratio where the phase vocoder produces acceptable
+            # quality.
+            remaining = speed
+            factors = []
+            while remaining > 2.0:
+                factors.append(math.sqrt(remaining))
+                remaining = math.sqrt(remaining)
+            factors.append(remaining)
+
             spec = to_spec(waveform)
-            stretched = stretch(spec, speed)
+            for factor in factors:
+                spec = stretch(spec, factor)
             expected_length = int(audio_tensor.shape[0] / speed)
-            result = to_wave(stretched, length=expected_length)
+            result = to_wave(spec, length=expected_length)
 
             result = result.squeeze(0).numpy()
             if channels_last:
