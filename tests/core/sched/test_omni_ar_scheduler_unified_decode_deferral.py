@@ -60,9 +60,7 @@ def _make_scheduler(*, model_arch: str, enable_unified_decode_graph: bool = True
             hf_config=SimpleNamespace(voxcpm2_runtime_config=runtime_config),
         )
     )
-    sched._voxcpm2_defer_waiting_for_unified_decode_graph = (
-        sched._voxcpm2_unified_decode_graph_admission_deferral_enabled()
-    )
+    sched._defer_waiting_for_pure_decode_graph = sched._pure_decode_graph_admission_deferral_enabled()
     return sched
 
 
@@ -71,7 +69,7 @@ def test_voxcpm2_unified_decode_graph_defers_waiting_when_decode_ready() -> None
     scheduler.running = [_MockRequest("decode")]
     scheduler.waiting = _MockQueue([_MockRequest("prefill", status=RequestStatus.WAITING)])
 
-    assert scheduler._should_defer_waiting_for_unified_decode_graph()
+    assert scheduler._should_defer_waiting_for_pure_decode_graph()
 
 
 def test_voxcpm2_unified_decode_graph_does_not_defer_without_decode_ready() -> None:
@@ -79,7 +77,7 @@ def test_voxcpm2_unified_decode_graph_does_not_defer_without_decode_ready() -> N
     scheduler.running = [_MockRequest("prefill-running", num_prompt_tokens=8, num_computed_tokens=4)]
     scheduler.waiting = _MockQueue([_MockRequest("waiting", status=RequestStatus.WAITING)])
 
-    assert not scheduler._should_defer_waiting_for_unified_decode_graph()
+    assert not scheduler._should_defer_waiting_for_pure_decode_graph()
 
 
 def test_unified_decode_graph_waiting_deferral_is_voxcpm2_specific() -> None:
@@ -87,7 +85,7 @@ def test_unified_decode_graph_waiting_deferral_is_voxcpm2_specific() -> None:
     scheduler.running = [_MockRequest("decode")]
     scheduler.waiting = _MockQueue([_MockRequest("prefill", status=RequestStatus.WAITING)])
 
-    assert not scheduler._should_defer_waiting_for_unified_decode_graph()
+    assert not scheduler._should_defer_waiting_for_pure_decode_graph()
 
 
 def test_unified_decode_graph_deferral_restores_waiting_queue(monkeypatch) -> None:

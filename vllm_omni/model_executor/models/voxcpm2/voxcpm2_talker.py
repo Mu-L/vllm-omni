@@ -38,6 +38,7 @@ from vllm.sequence import IntermediateTensors
 
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.platforms import current_omni_platform
+from vllm_omni.runner_assisted_metadata import RunnerAssistedFullAttentionMetadataRequest
 from vllm_omni.utils.speaker_cache import (
     get_speaker_cache,
     iter_custom_voice_profiles,
@@ -2074,7 +2075,7 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
         num_scheduled_tokens: list[int],
         num_computed_tokens: list[int],
         max_num_scheduled_tokens: int,
-    ) -> tuple[int, bool] | None:
+    ) -> RunnerAssistedFullAttentionMetadataRequest | None:
         if not self._enable_unified_decode_graph or not self._enable_cuda_graph:
             return None
         if num_reqs <= 1 or num_reqs > self._unified_decode_graph_max_batch_size:
@@ -2104,7 +2105,10 @@ class VoxCPM2TalkerForConditionalGeneration(nn.Module):
         bucket_size = self._select_unified_graph_bucket_size(num_reqs)
         if bucket_size is None:
             return None
-        return bucket_size, bucket_size not in self._unified_graphs
+        return RunnerAssistedFullAttentionMetadataRequest(
+            num_reqs_padded=bucket_size,
+            for_cudagraph_capture=bucket_size not in self._unified_graphs,
+        )
 
     def set_runner_assisted_full_attention_metadata_context(
         self,

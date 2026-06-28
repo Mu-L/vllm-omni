@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from vllm_omni.outputs import OmniModelRunnerOutput
+from vllm_omni.runner_assisted_metadata import RunnerAssistedFullAttentionMetadataRequest
 from vllm_omni.worker.gpu_ar_model_runner import (
     ExecuteModelState,
     GPUARModelRunner,
@@ -79,12 +80,39 @@ def test_runner_assisted_full_attention_metadata_request_and_context_hooks():
     calls = []
 
     class Model:
-        def get_runner_assisted_full_attention_metadata_request(self, **kwargs):
-            calls.append(("request", kwargs))
-            return 12, True
+        def get_runner_assisted_full_attention_metadata_request(
+            self,
+            *,
+            req_ids: list[str],
+            num_reqs: int,
+            num_scheduled_tokens: list[int],
+            num_computed_tokens: list[int],
+            max_num_scheduled_tokens: int,
+        ) -> RunnerAssistedFullAttentionMetadataRequest:
+            calls.append(
+                (
+                    "request",
+                    {
+                        "req_ids": req_ids,
+                        "num_reqs": num_reqs,
+                        "num_scheduled_tokens": num_scheduled_tokens,
+                        "num_computed_tokens": num_computed_tokens,
+                        "max_num_scheduled_tokens": max_num_scheduled_tokens,
+                    },
+                )
+            )
+            return RunnerAssistedFullAttentionMetadataRequest(
+                num_reqs_padded=12,
+                for_cudagraph_capture=True,
+            )
 
-        def set_runner_assisted_full_attention_metadata_context(self, **kwargs):
-            calls.append(("context", kwargs))
+        def set_runner_assisted_full_attention_metadata_context(
+            self,
+            *,
+            enabled: bool,
+            num_reqs: int = 0,
+        ) -> None:
+            calls.append(("context", {"enabled": enabled, "num_reqs": num_reqs}))
 
     runner = object.__new__(GPUARModelRunner)
     runner.model = Model()
@@ -104,7 +132,10 @@ def test_runner_assisted_full_attention_metadata_request_and_context_hooks():
     )
     context_disabled = runner._set_runner_assisted_full_attention_metadata_context(enabled=False)
 
-    assert request == (8, True)
+    assert request == RunnerAssistedFullAttentionMetadataRequest(
+        num_reqs_padded=8,
+        for_cudagraph_capture=True,
+    )
     assert context_enabled
     assert context_disabled
     assert calls == [

@@ -94,9 +94,7 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         self._latest_omni_connector_output: OmniConnectorOutput | None = None
         # Snapshot prompt length for each streaming input update
         self._new_prompt_len_snapshot: dict[str, int] = {}
-        self._voxcpm2_defer_waiting_for_unified_decode_graph = (
-            self._voxcpm2_unified_decode_graph_admission_deferral_enabled()
-        )
+        self._defer_waiting_for_pure_decode_graph = self._pure_decode_graph_admission_deferral_enabled()
 
     def _get_confirmed_num_computed_tokens(self, request: Request) -> int:
         """num_computed_tokens minus async placeholders (KV actually on GPU)."""
@@ -209,10 +207,12 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
 
         return False
 
-    def _voxcpm2_unified_decode_graph_admission_deferral_enabled(self) -> bool:
-        # This is intentionally VoxCPM2-specific. Other models can reuse the
-        # same scheduling idea only if their decode graph has the same
-        # pure-decode-batch requirement and an opt-in runtime config.
+    def _pure_decode_graph_admission_deferral_enabled(self) -> bool:
+        # The scheduler mechanism is generic: if a model's optimized decode
+        # graph requires pure decode batches, waiting prefill admissions can
+        # be deferred for one tick while decode-ready requests are running.
+        # Enabling remains model opt-in; currently only VoxCPM2 exposes the
+        # matching runtime config and CUDA graph contract.
         model_config = self.vllm_config.model_config
         if getattr(model_config, "model_arch", None) != "VoxCPM2TalkerForConditionalGeneration":
             return False
@@ -223,12 +223,12 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
             return bool(runtime_config.get("enable_unified_decode_graph", False))
         return bool(getattr(runtime_config, "enable_unified_decode_graph", False))
 
-    def _should_defer_waiting_for_unified_decode_graph(self) -> bool:
-        # VoxCPM2's full unified decode graph only applies to pure decode
-        # batches.  When a decode-ready request is already running, defer new
+    def _should_defer_waiting_for_pure_decode_graph(self) -> bool:
+        # Some model-owned decode graphs only apply to pure decode batches.
+        # When a decode-ready request is already running, defer new
         # waiting admissions for this scheduler tick so decode-only steps keep
-        # using the full unified graph path.
-        if not self._voxcpm2_defer_waiting_for_unified_decode_graph:
+        # using the graph path.
+        if not self._defer_waiting_for_pure_decode_graph:
             return False
         if not self.waiting or not self.running:
             return False
@@ -257,9 +257,9 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
                 self.waiting, self.running, scheduler_requests=self.requests
             )
 
-        defer_waiting_for_unified_decode = self._should_defer_waiting_for_unified_decode_graph()
+        defer_waiting_for_pure_decode_graph = self._should_defer_waiting_for_pure_decode_graph()
         original_waiting = None
-        if defer_waiting_for_unified_decode:
+        if defer_waiting_for_pure_decode_graph:
             original_waiting = self.waiting
             self.waiting = create_request_queue(self.policy)
 

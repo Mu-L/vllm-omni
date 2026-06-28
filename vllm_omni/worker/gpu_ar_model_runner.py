@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from copy import copy
 from dataclasses import replace
-from typing import Any, NamedTuple, Protocol
+from typing import Any, NamedTuple
 
 import numpy as np
 import torch
@@ -42,6 +42,7 @@ from vllm.v1.worker.utils import is_residual_scattered_for_sp
 from vllm_omni.data_entry_keys import flatten_payload
 from vllm_omni.distributed.omni_connectors.kv_transfer_manager import OmniKVTransferManager
 from vllm_omni.outputs import OmniModelRunnerOutput
+from vllm_omni.runner_assisted_metadata import RunnerAssistedFullAttentionMetadataRequest
 from vllm_omni.utils.mm_outputs import build_mm_cpu, to_payload_element
 from vllm_omni.worker.gpu_model_runner import OmniGPUModelRunner
 from vllm_omni.worker.omni_connector_model_runner_mixin import OmniConnectorModelRunnerMixin
@@ -140,25 +141,6 @@ class _OmniOutputTensorSnapshot(NamedTuple):
     staged_hidden_states_cpu: torch.Tensor | None
     multimodal_outputs: Any
     async_payload: _AsyncCPUPayloadSnapshot | None = None
-
-
-class RunnerAssistedAttentionMetadataProvider(Protocol):
-    def get_runner_assisted_full_attention_metadata_request(
-        self,
-        *,
-        req_ids: list[str],
-        num_reqs: int,
-        num_scheduled_tokens: list[int],
-        num_computed_tokens: list[int],
-        max_num_scheduled_tokens: int,
-    ) -> tuple[int, bool] | None: ...
-
-    def set_runner_assisted_full_attention_metadata_context(
-        self,
-        *,
-        enabled: bool,
-        num_reqs: int = 0,
-    ) -> None: ...
 
 
 class OmniAsyncGPUModelRunnerOutput(AsyncGPUModelRunnerOutput):
@@ -614,7 +596,7 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         num_scheduled_tokens_np: np.ndarray,
         num_computed_tokens: list[int],
         max_num_scheduled_tokens: int,
-    ) -> tuple[int, bool] | None:
+    ) -> RunnerAssistedFullAttentionMetadataRequest | None:
         # Models without this hook keep the normal runner path. VoxCPM2 uses
         # it to ask the runner for padded FULL attention metadata while keeping
         # graph policy and lifecycle in the model layer.
@@ -630,13 +612,20 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         )
         if request is None:
             return None
-        try:
-            padded_num_reqs, for_capture = request
-        except (TypeError, ValueError):
-            logger.warning("Ignoring invalid runner-assisted full attention metadata request: %r", request)
-            return None
-        padded_num_reqs = max(num_reqs_padded, min(int(padded_num_reqs), self.scheduler_config.max_num_seqs))
-        return padded_num_reqs, bool(for_capture)
+        if not isinstance(request, RunnerAssistedFullAttentionMetadataRequest):
+            raise TypeError(
+                "runner-assisted full attention metadata hook must return "
+                "RunnerAssistedFullAttentionMetadataRequest or None, got "
+                f"{type(request).__name__}"
+            )
+        padded_num_reqs = max(
+            num_reqs_padded,
+            min(int(request.num_reqs_padded), self.scheduler_config.max_num_seqs),
+        )
+        return RunnerAssistedFullAttentionMetadataRequest(
+            num_reqs_padded=padded_num_reqs,
+            for_cudagraph_capture=bool(request.for_cudagraph_capture),
+        )
 
     def _refresh_runner_assisted_full_attention_metadata_buffers(
         self,
@@ -1137,7 +1126,8 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
             runner_assisted_full_attn_capture = False
             if runner_assisted_full_attn:
                 assert runner_assisted_full_attn_request is not None
-                num_reqs_padded, runner_assisted_full_attn_capture = runner_assisted_full_attn_request
+                num_reqs_padded = runner_assisted_full_attn_request.num_reqs_padded
+                runner_assisted_full_attn_capture = runner_assisted_full_attn_request.for_cudagraph_capture
                 if max_num_scheduled_tokens == 1:
                     num_tokens_padded = max(num_tokens_padded, num_reqs_padded)
                 else:

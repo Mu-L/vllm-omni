@@ -10,6 +10,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 RUNNER = REPO_ROOT / "vllm_omni" / "worker" / "gpu_ar_model_runner.py"
+RUNNER_ASSISTED_METADATA = REPO_ROOT / "vllm_omni" / "runner_assisted_metadata.py"
 TALKER = REPO_ROOT / "vllm_omni" / "model_executor" / "models" / "voxcpm2" / "voxcpm2_talker.py"
 DEPLOY = REPO_ROOT / "vllm_omni" / "deploy" / "voxcpm2.yaml"
 
@@ -35,12 +36,14 @@ def test_ar_runner_exposes_runner_assisted_full_metadata_hook():
         source.index("runner_assisted_full_attn_request = self._get_runner_assisted_full_attention_metadata_request") :
     ]
     padding_source = padding_source[: padding_source.index("ubatch_slices, ubatch_slices_padded")]
-    assert "num_reqs_padded, runner_assisted_full_attn_capture =" in padding_source
+    assert "runner_assisted_full_attn_request.num_reqs_padded" in padding_source
+    assert "runner_assisted_full_attn_request.for_cudagraph_capture" in padding_source
     assert "num_tokens_padded = max(num_tokens_padded, num_reqs_padded)" in padding_source
 
 
 def test_ar_runner_without_model_hook_stays_on_normal_path():
     source = RUNNER.read_text()
+    contract_source = RUNNER_ASSISTED_METADATA.read_text()
     request_source = source[source.index("def _get_runner_assisted_full_attention_metadata_request") :]
     request_source = request_source[
         : request_source.index("def _refresh_runner_assisted_full_attention_metadata_buffers")
@@ -48,11 +51,16 @@ def test_ar_runner_without_model_hook_stays_on_normal_path():
     compact_request_source = "".join(request_source.split())
 
     assert "Models without this hook keep the normal runner path" in request_source
-    assert "class RunnerAssistedAttentionMetadataProvider(Protocol)" in source
+    assert "class RunnerAssistedAttentionMetadataProvider(Protocol)" in contract_source
+    assert "class RunnerAssistedFullAttentionMetadataRequest(NamedTuple)" in contract_source
+    assert "tuple[int, bool]" not in contract_source
     assert 'hook=getattr(self.model,"get_runner_assisted_full_attention_metadata_request",None)' in (
         compact_request_source
     )
     assert "ifnotcallable(hook):returnNone" in compact_request_source
+    assert "isinstance(request,RunnerAssistedFullAttentionMetadataRequest)" in compact_request_source
+    assert "request.num_reqs_padded" in request_source
+    assert "request.for_cudagraph_capture" in request_source
     assert "exceptException" not in compact_request_source
 
     set_context_source = source[source.index("def _set_runner_assisted_full_attention_metadata_context") :]
@@ -120,6 +128,7 @@ def test_voxcpm2_batch_unified_graph_requires_runner_metadata_marker():
     assert "allow_unified_decode_graph_batch_attention" not in source
     assert "get_runner_assisted_full_attention_metadata_request" in source
     assert "set_runner_assisted_full_attention_metadata_context" in source
+    assert "RunnerAssistedFullAttentionMetadataRequest" in source
     assert "_runner_assisted_unified_decode_graph_active" in source
     assert "runner_full_metadata_missing" in source
     assert "_build_unified_graph_bucket_sizes" in source
@@ -144,6 +153,7 @@ def test_voxcpm2_batch_unified_graph_requires_runner_metadata_marker():
     needs_source = needs_source[: needs_source.index("def set_runner_assisted_full_attention_metadata_context")]
     assert "_select_unified_graph_bucket_size(num_reqs)" in needs_source
     assert "_should_use_decode_graph(num_reqs)" not in needs_source
+    assert "RunnerAssistedFullAttentionMetadataRequest(" in needs_source
 
 
 def test_voxcpm2_unified_skip_preserves_segmented_decode_graphs():
