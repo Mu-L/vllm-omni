@@ -1,3 +1,4 @@
+import math
 from io import BytesIO
 
 import numpy as np
@@ -115,18 +116,15 @@ class AudioMixin:
             )
 
             # For extreme speed ratios (> 2.0), decompose into multiple
-            # passes using n-th root decomposition so that each individual
-            # pass stays within a ratio where the phase vocoder produces
-            # acceptable quality. The threshold MAX_PASS_RATIO = 1.4 is
-            # chosen because phase vocoder TimeStretch is empirically
-            # reliable up to ~1.4× for speech; above ~1.5×, aggressive
-            # phase reconstruction smears short consonants.
-            MAX_PASS_RATIO = 1.4
-            n = 1
-            while speed ** (1.0 / n) > MAX_PASS_RATIO:
-                n += 1
-            factor = speed ** (1.0 / n)
-            factors = [factor] * n
+            # passes using sqrt decomposition so that each individual pass
+            # stays within a ratio where the phase vocoder produces acceptable
+            # quality.
+            remaining = speed
+            factors = []
+            while remaining > 2.0:
+                factors.append(math.sqrt(remaining))
+                remaining = math.sqrt(remaining)
+            factors.append(remaining)
 
             spec = to_spec(waveform)
             for factor in factors:
