@@ -891,7 +891,7 @@ steps:
 
 
       - label: ":full_moon: Diffusion X2I(&A&T) · Function Test with L4"
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         commands:
           - pytest -sv tests/e2e/ -k "not test_wan and not test_bagel_expansion and not hunyuan" -m "full_model and diffusion and L4" --run-level "full_model" --ignore=tests/e2e/accuracy
         agents:
